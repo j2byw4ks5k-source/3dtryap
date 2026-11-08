@@ -8,12 +8,26 @@ import { dot, type V3 } from '../geometry/vec';
 import { boundsOf, drawingPts, drawingSVG, polysPts, sectionSVG } from '../render/svg2d';
 import { drawingSig, polysSig, sameSig, type Sig } from './signature';
 import { getBuilt, type Built } from './shapeCache';
+import { makeOrtho3DQuestion, makeMissingViewQuestion, makeWrongViewQuestion } from './ortho';
 
-export type Kind = 'section' | 'view';
+import type { TriMesh } from '../geometry/mesh';
+
+export type Kind = 'section' | 'view' | 'ortho3d' | 'missing' | 'wrongview';
+export type Mode = 'section' | 'view' | 'ortho' | 'mix';
 export type Level = 1 | 2 | 3;
+export const KIND_LABEL: Record<Kind, string> = {
+  section: '断面当て',
+  view: '矢視当て',
+  ortho3d: '三面図→立体',
+  missing: '不足する1面',
+  wrongview: '三面図の誤り探し',
+};
+export const ORTHO_KINDS: Kind[] = ['ortho3d', 'missing', 'wrongview'];
 
 export interface Option {
-  svg: string;
+  svg?: string; // 2D 図
+  mesh?: TriMesh; // 3D 形状（UI 側で画像化）
+  label?: string; // 図の名称など
   note: string;
   correct: boolean;
 }
@@ -28,10 +42,16 @@ export interface Question {
   d?: number; // 断面の平面位置 n·p = d
   view?: ViewName;
   planeLabel?: string;
+  /** 3D の代わりに最初に表示する図面（SVG） */
+  board?: string;
+  /** 回答前に 3D 形状を見せるか */
+  showModel: boolean;
+  /** 断面のヒント用（切断線） */
+  polys?: Polys;
 }
 
-const rnd = <T>(a: T[]) => a[Math.floor(Math.random() * a.length)];
-const shuffle = <T>(a: T[]) => {
+export const rnd = <T>(a: T[]) => a[Math.floor(Math.random() * a.length)];
+export const shuffle = <T>(a: T[]) => {
   for (let i = a.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [a[i], a[j]] = [a[j], a[i]];
@@ -158,13 +178,13 @@ export function makeSectionQuestion(w: ManifoldToplevel, level: Level, weights?:
   const span = Math.max(...chosen.map((c) => { const bb = boundsOf(polysPts(c.polys)); return Math.max(bb.maxX - bb.minX, bb.maxY - bb.minY); })) * 1.12;
   const opts = shuffle(chosen.map((c, i) => ({ svg: sectionSVG(c.polys, span), note: c.note, correct: i === 0 })));
   return {
-    kind: 'section', shape: def, frame: f, d: correctD, planeLabel: dir.label,
+    kind: 'section', shape: def, frame: f, d: correctD, planeLabel: dir.label, showModel: true, polys: correct,
     prompt: `赤い面で切断し、矢印の向きに見た断面はどれ？`,
     options: opts, answer: opts.findIndex((o) => o.correct),
   };
 }
 
-function pickDistinct<T extends { sig?: Sig }>(correct: T, cands: T[], sigOf: (c: T) => Sig): T[] {
+export function pickDistinct<T extends { sig?: Sig }>(correct: T, cands: T[], sigOf: (c: T) => Sig): T[] {
   const out: T[] = [correct];
   // 優先順位を少しランダム化しつつ、重複しない3つを選ぶ
   for (const c of cands) {
@@ -182,7 +202,7 @@ const VIEW_POOL: Record<Level, ViewName[]> = {
   2: ['front', 'top', 'right', 'left', 'back'],
   3: ['front', 'top', 'right', 'left', 'back', 'bottom'],
 };
-const mirrorDrawing = (d: Drawing): Drawing => ({ segs: d.segs.map((s) => ({ a: [-s.a[0], s.a[1]], b: [-s.b[0], s.b[1]], hidden: s.hidden })) });
+export const mirrorDrawing = (d: Drawing): Drawing => ({ segs: d.segs.map((s) => ({ a: [-s.a[0], s.a[1]], b: [-s.b[0], s.b[1]], hidden: s.hidden })) });
 
 interface ViewCand { dr: Drawing; note: string; sig?: Sig }
 
@@ -214,16 +234,27 @@ export function makeViewQuestion(w: ManifoldToplevel, level: Level, weights?: Ma
   const span = Math.max(...chosen.map((c) => { const bb = boundsOf(drawingPts(c.dr)); return Math.max(bb.maxX - bb.minX, bb.maxY - bb.minY); })) * 1.12;
   const opts = shuffle(chosen.map((c, i) => ({ svg: drawingSVG(c.dr, span), note: c.note, correct: i === 0 })));
   return {
-    kind: 'view', shape: def, frame: f, view,
+    kind: 'view', shape: def, frame: f, view, showModel: true,
     prompt: `矢印の方向から見た図（第三角法・隠れ線あり）はどれ？`,
     options: opts, answer: opts.findIndex((o) => o.correct),
   };
 }
 
-export function makeQuestion(w: ManifoldToplevel, kind: Kind | 'mix', level: Level, weights?: Map<string, number>): Question {
+function kindFor(mode: Mode | Kind): Kind {
+  if (mode === 'mix') return rnd<Kind>(['section', 'section', 'view', 'view', 'ortho3d', 'missing', 'wrongview']);
+  if (mode === 'ortho') return rnd(ORTHO_KINDS);
+  return mode;
+}
+
+export function makeQuestion(w: ManifoldToplevel, mode: Mode | Kind, level: Level, weights?: Map<string, number>): Question {
   for (let i = 0; i < 20; i++) {
-    const k = kind === 'mix' ? (Math.random() < 0.5 ? 'section' : 'view') : kind;
-    const q = k === 'section' ? makeSectionQuestion(w, level, weights) : makeViewQuestion(w, level, weights);
+    const k = kindFor(mode);
+    const q =
+      k === 'section' ? makeSectionQuestion(w, level, weights)
+      : k === 'view' ? makeViewQuestion(w, level, weights)
+      : k === 'ortho3d' ? makeOrtho3DQuestion(w, level, weights)
+      : k === 'missing' ? makeMissingViewQuestion(w, level, weights)
+      : makeWrongViewQuestion(w, level, weights);
     if (q) return q;
   }
   throw new Error('問題を生成できませんでした');

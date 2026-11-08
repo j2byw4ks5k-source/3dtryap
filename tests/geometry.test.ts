@@ -6,7 +6,8 @@ import { toTriMesh } from '../src/geometry/mesh';
 import { projectHLR } from '../src/geometry/hlr';
 import { makeFrame, viewFrame } from '../src/geometry/frame';
 import { sectionPolys, polysArea } from '../src/geometry/section';
-import { makeQuestion } from '../src/quiz/generator';
+import { makeQuestion, type Kind } from '../src/quiz/generator';
+import { makeVariants, mirrorMeshX } from '../src/quiz/ortho';
 
 let w: ManifoldToplevel;
 beforeAll(async () => { w = await initKernel(); });
@@ -72,13 +73,35 @@ describe('断面', () => {
 
 describe('問題生成', () => {
   it('各モード・難易度で4択・正解1つ', () => {
-    for (const kind of ['section', 'view'] as const)
+    for (const kind of ['section', 'view', 'ortho3d', 'missing', 'wrongview'] as Kind[])
       for (const lv of [1, 2, 3] as const)
         for (let i = 0; i < 5; i++) {
           const q = makeQuestion(w, kind, lv);
-          expect(q.options.length).toBe(4);
+          expect(q.options.length, kind).toBe(kind === 'wrongview' ? 3 : 4);
+          if (kind === 'ortho3d') expect(q.options.every((o) => o.mesh)).toBe(true);
+          if (kind !== 'section' && kind !== 'view') expect(q.board || q.showModel).toBeTruthy();
           expect(q.options.filter((o) => o.correct).length).toBe(1);
           expect(q.options[q.answer].correct).toBe(true);
         }
+  });
+});
+
+describe('三面図系の補助', () => {
+  it('鏡像メッシュは体積の符号が保たれる（三角形の向きを反転）', () => {
+    const t = toTriMesh(shape('B07'));
+    const vol = (m: typeof t) => {
+      let v = 0;
+      for (let i = 0; i < m.idx.length; i += 3) {
+        const [a, b, c] = [0, 1, 2].map((k) => [0, 1, 2].map((j) => m.pos[m.idx[i + k] * 3 + j]));
+        v += (a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0])) / 6;
+      }
+      return v;
+    };
+    expect(vol(mirrorMeshX(t))).toBeCloseTo(vol(t), 0);
+  });
+  it('変形立体（切欠き・面取り・穴・溝）は元の形状と体積が異なる', () => {
+    const def = SHAPES.find((s) => s.id === 'A02')!;
+    const vs = makeVariants(w, def, 4);
+    expect(vs.length).toBeGreaterThanOrEqual(3);
   });
 });

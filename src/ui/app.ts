@@ -1,7 +1,8 @@
 // 画面遷移とゲーム進行
 import type { ManifoldToplevel } from 'manifold-3d';
-import { Viewer3D } from '../render/viewer3d';
-import { makeQuestion, type Kind, type Level, type Question } from '../quiz/generator';
+import { Snapshotter, Viewer3D } from '../render/viewer3d';
+import { KIND_LABEL, ORTHO_KINDS, makeQuestion, type Kind, type Level, type Mode, type Option, type Question } from '../quiz/generator';
+import { dimsOf } from '../quiz/ortho';
 import { getBuilt } from '../quiz/shapeCache';
 import { history, type Rec } from '../storage/history';
 import { SHAPES, CATEGORY_LABEL, type Category } from '../shapes';
@@ -9,10 +10,11 @@ import { projectHLR } from '../geometry/hlr';
 import { viewFrame, VIEWS, type ViewName } from '../geometry/frame';
 import { drawingSVG } from '../render/svg2d';
 
-type Mode = Kind | 'mix';
 interface Settings { mode: Mode; level: Level; count: number; lock: boolean }
 
-const MODE_LABEL: Record<Mode, string> = { section: '断面当て', view: '矢視当て', mix: 'ミックス' };
+const MODE_LABEL: Record<Mode, string> = { section: '断面', view: '矢視', ortho: '三面図', mix: 'ミックス' };
+const MODE_KINDS: Record<Mode, Kind[] | undefined> = { section: ['section'], view: ['view'], ortho: ORTHO_KINDS, mix: undefined };
+const HINT_LABEL: Partial<Record<Kind, string>> = { section: 'ヒント：切断線', view: 'ヒント：透視' };
 const LEVEL_LABEL: Record<Level, string> = { 1: 'やさしい', 2: 'ふつう', 3: 'むずかしい' };
 const SKEY = 'kukan-trainer.settings';
 
@@ -36,15 +38,54 @@ export class App {
   private answered = false;
   private mistakes: { q: Question; chosen: number }[] = [];
   private timer = 0;
+  private hintUsed = false;
+  private board: HTMLElement;
+  private snap: Snapshotter | null = null;
+  private imgCache = new WeakMap<object, string>();
 
   constructor(private root: HTMLElement, private w: ManifoldToplevel) {
     this.stage = document.createElement('div');
     this.stage.className = 'stage';
     this.viewer = new Viewer3D(this.stage);
+    this.board = document.createElement('div');
+    this.board.className = 'board';
+    this.board.hidden = true;
+    this.stage.appendChild(this.board);
+    this.warmup();
     let s: Partial<Settings> = {};
     try { s = JSON.parse(localStorage.getItem(SKEY) ?? '{}'); } catch { /* noop */ }
     this.settings = { mode: 'section', level: 1, count: 10, lock: false, ...s };
     this.home();
+  }
+
+  /** 空き時間に全形状の寸法を求めておく（三面図問題の誤答候補選びを速くする） */
+  private warmup() {
+    const ids = SHAPES.slice();
+    const idle = (cb: () => void) => ('requestIdleCallback' in window ? requestIdleCallback(cb) : setTimeout(cb, 30));
+    const step = () => {
+      const t0 = performance.now();
+      while (ids.length && performance.now() - t0 < 12) dimsOf(this.w, ids.shift()!);
+      if (ids.length) idle(step);
+    };
+    idle(step);
+  }
+
+  private optImage(o: Option) {
+    let url = this.imgCache.get(o.mesh!);
+    if (!url) {
+      this.snap ??= new Snapshotter();
+      url = this.snap.render(o.mesh!);
+      this.imgCache.set(o.mesh!, url);
+    }
+    return `<img class="snap" src="${url}" alt="">`;
+  }
+
+  private figOf(o: Option) {
+    return o.svg ?? this.optImage(o);
+  }
+
+  private showBoard(on: boolean) {
+    this.board.hidden = !on;
   }
 
   private saveSettings() {
@@ -72,7 +113,7 @@ export class App {
         </header>
         <section class="card">
           <h2>モード</h2>
-          ${seg('mode', ['section', 'view', 'mix'] as Mode[], (v) => MODE_LABEL[v], st.mode)}
+          ${seg('mode', ['section', 'view', 'ortho', 'mix'] as Mode[], (v) => MODE_LABEL[v], st.mode)}
           <h2>難易度</h2>
           ${seg('level', [1, 2, 3] as Level[], (v) => LEVEL_LABEL[v], st.level)}
           <h2>問題数</h2>
@@ -129,6 +170,7 @@ export class App {
         <div class="stage-slot"></div>
         <div class="tools">
           <span class="badge" id="tag"></span>
+          <button class="chip hint" id="hint"></button>
           <button class="chip" id="reset">視点リセット</button>
         </div>
         <p class="prompt" id="prompt"></p>
@@ -138,12 +180,12 @@ export class App {
     this.mountStage(this.root.querySelector('.stage-slot')!);
     this.root.querySelector('#quit')!.addEventListener('click', () => (this.nAnswered > 0 ? this.result() : this.home()));
     this.root.querySelector('#reset')!.addEventListener('click', () => this.viewer.resetCamera());
+    this.root.querySelector('#hint')!.addEventListener('click', () => this.useHint());
     this.nextQuestion();
   }
 
   private gen(): Question {
-    const kind = this.settings.mode === 'mix' ? undefined : this.settings.mode;
-    return makeQuestion(this.w, this.settings.mode, this.settings.level, history.weights(kind));
+    return makeQuestion(this.w, this.settings.mode, this.settings.level, history.weights(MODE_KINDS[this.settings.mode]));
   }
 
   private nextQuestion() {
@@ -152,26 +194,48 @@ export class App {
     const q = (this.q = this.nextQ ?? this.gen());
     this.nextQ = null;
     this.answered = false;
+    this.hintUsed = false;
     const b = getBuilt(this.w, q.shape);
-    this.viewer.setShape(b.mesh);
-    if (q.kind === 'section') {
-      this.viewer.addPlane(q.frame, q.d!);
-      this.viewer.addViewArrow(q.frame);
-    } else this.viewer.addViewArrow(q.frame, 'A');
+    if (q.showModel) {
+      this.viewer.setShape(b.mesh);
+      if (q.kind === 'section') {
+        this.viewer.addPlane(q.frame, q.d!);
+        this.viewer.addViewArrow(q.frame);
+      } else if (q.kind === 'view') this.viewer.addViewArrow(q.frame, 'A');
+    } else this.viewer.clear();
+    this.board.innerHTML = q.board ?? '';
+    this.showBoard(!!q.board);
     this.viewer.setInteractive(!this.settings.lock);
+    const hint = this.root.querySelector<HTMLButtonElement>('#hint')!;
+    hint.hidden = !HINT_LABEL[q.kind];
+    hint.disabled = false;
+    hint.textContent = (HINT_LABEL[q.kind] ?? '') + '（得点½）';
     const $ = (id: string) => this.root.querySelector<HTMLElement>('#' + id)!;
     $('prog').textContent = count ? `${this.idx + 1} / ${count}` : `${this.idx + 1}問目`;
-    $('tag').textContent = `${q.kind === 'section' ? '断面' : '矢視'}｜${CATEGORY_LABEL[q.shape.cat]}｜${q.shape.name}`;
+    // 三面図→立体では形状名が答えになるので伏せる
+    $('tag').textContent = `${KIND_LABEL[q.kind]}｜${CATEGORY_LABEL[q.shape.cat]}${q.kind === 'ortho3d' ? '' : '｜' + q.shape.name}`;
     $('prompt').textContent = q.prompt;
     $('fb').innerHTML = '';
     const opts = $('opts');
-    opts.innerHTML = q.options.map((o, i) => `<button class="opt" data-i="${i}"><span class="lbl">${'ABCD'[i]}</span>${o.svg}<span class="note"></span></button>`).join('');
+    opts.className = 'opts' + (q.options.length === 3 ? ' three' : '');
+    opts.innerHTML = q.options.map((o, i) => `<button class="opt" data-i="${i}"><span class="lbl">${o.label ?? 'ABCD'[i]}</span>${this.figOf(o)}<span class="note"></span></button>`).join('');
     opts.querySelectorAll<HTMLButtonElement>('.opt').forEach((b) => b.addEventListener('click', () => this.answer(Number(b.dataset.i))));
     this.qStart = performance.now();
     clearInterval(this.timer);
     this.timer = window.setInterval(() => {
       if (!this.answered) $('time').textContent = ((performance.now() - this.qStart) / 1000).toFixed(1);
     }, 100);
+  }
+
+  private useHint() {
+    const q = this.q;
+    if (!q || this.answered || this.hintUsed) return;
+    this.hintUsed = true;
+    if (q.kind === 'section') this.viewer.showCutLines(q.polys!, q.frame, q.d!);
+    if (q.kind === 'view') this.viewer.setXray(true);
+    const b = this.root.querySelector<HTMLButtonElement>('#hint')!;
+    b.disabled = true;
+    b.textContent = 'ヒント使用中';
   }
 
   private answer(i: number) {
@@ -187,13 +251,14 @@ export class App {
       this.streak++;
       this.okCount++;
       gained = 100 + Math.max(0, Math.round(50 * (1 - ms / 20000))) + Math.min(50, (this.streak - 1) * 10);
+      if (this.hintUsed) gained = Math.round(gained / 2);
       this.score += gained;
     } else {
       this.streak = 0;
       this.mistakes.push({ q, chosen: i });
       navigator.vibrate?.(120);
     }
-    const rec: Rec = { t: Date.now(), k: q.kind, s: q.shape.id, c: q.shape.cat, lv: this.settings.level, ok, ms: Math.round(ms) };
+    const rec: Rec = { t: Date.now(), k: q.kind, s: q.shape.id, c: q.shape.cat, lv: this.settings.level, ok, ms: Math.round(ms), h: this.hintUsed || undefined };
     history.add(rec);
     // 選択肢に解説を表示
     this.root.querySelectorAll<HTMLElement>('.opt').forEach((el, j) => {
@@ -205,22 +270,31 @@ export class App {
     this.root.querySelector('#time')!.textContent = (ms / 1000).toFixed(1);
     const fb = this.root.querySelector<HTMLElement>('#fb')!;
     fb.innerHTML = `
-      <div class="res ${ok ? 'ok' : 'ng'}">${ok ? `正解！ +${gained}${this.streak > 1 ? `（${this.streak}連続）` : ''}` : '不正解'}</div>
+      <div class="res ${ok ? 'ok' : 'ng'}">${ok ? `正解！ +${gained}${this.streak > 1 ? `（${this.streak}連続）` : ''}${this.hintUsed ? '（ヒント使用）' : ''}` : '不正解'}</div>
+      ${q.kind === 'ortho3d' ? `<div class="reveal-name">正解：${esc(q.shape.name)}</div>` : ''}
       <div class="row">
-        <button class="chip" id="again">${q.kind === 'section' ? '切断の様子を再生' : 'その方向から見る'}</button>
+        <button class="chip" id="again">${q.kind === 'section' ? '切断の様子を再生' : q.board ? '図面 ⇄ 3D' : 'その方向から見る'}</button>
         <button class="primary" id="next">次へ ▶</button>
       </div>`;
     const show = () => {
       if (q.kind === 'section') this.viewer.revealSection(getBuilt(this.w, q.shape).m, q.frame, q.d!);
+      else if (q.kind === 'ortho3d') this.viewer.resetCamera();
       else this.viewer.flyTo(q.frame, 1);
     };
     this.viewer.setInteractive(true);
+    this.viewer.setXray(false);
+    if (!q.showModel) {
+      // 図面から出題した問題は、答え合わせで立体を表示
+      this.viewer.setShape(getBuilt(this.w, q.shape).mesh);
+      this.showBoard(false);
+    }
     show();
     fb.querySelector('#again')!.addEventListener('click', () => {
       if (q.kind === 'section') {
         this.viewer.setShape(getBuilt(this.w, q.shape).mesh);
         setTimeout(show, 50);
-      } else show();
+      } else if (q.board) this.showBoard(this.board.hidden === true);
+      else show();
     });
     fb.querySelector('#next')!.addEventListener('click', () => {
       this.idx++;
@@ -248,9 +322,10 @@ export class App {
           <div><b>${n ? fmtSec(this.totalMs / n) : '—'}</b><span>平均時間</span></div>
         </div>
         ${this.mistakes.length ? `<h2>間違えた問題</h2><div class="miss">${this.mistakes.map(({ q, chosen }) => `
-          <div class="miss-item"><div class="mi-h">${q.kind === 'section' ? '断面' : '矢視'}｜${esc(q.shape.name)}</div>
-            <div class="mi-figs"><div><span>あなた</span>${q.options[chosen].svg}<em>${esc(q.options[chosen].note)}</em></div>
-            <div><span>正解</span>${q.options[q.answer].svg}</div></div></div>`).join('')}</div>` : '<p class="perfect">全問正解！</p>'}
+          <div class="miss-item"><div class="mi-h">${KIND_LABEL[q.kind]}｜${esc(q.shape.name)}</div>
+            ${q.board ? `<div class="mi-board">${q.board}</div>` : ''}
+            <div class="mi-figs"><div><span>あなた${q.options[chosen].label ? '：' + q.options[chosen].label : ''}</span>${this.figOf(q.options[chosen])}<em>${esc(q.options[chosen].note)}</em></div>
+            <div><span>正解${q.options[q.answer].label ? '：' + q.options[q.answer].label : ''}</span>${this.figOf(q.options[q.answer])}${q.kind === 'wrongview' ? `<em>${esc(q.options[q.answer].note)}</em>` : ''}</div></div></div>`).join('')}</div>` : '<p class="perfect">全問正解！</p>'}
         <div class="row">
           <button class="primary big" id="again">もう一度</button>
           <button class="big" id="home">ホーム</button>
@@ -287,7 +362,7 @@ export class App {
     this.root.innerHTML = `
       <div class="screen stats">
         <header class="bar"><button class="icon" id="back">←</button><h1>成績</h1><span></span></header>
-        <section class="card"><h2>問題タイプ別</h2>${bar('断面当て', byKind.get('section'))}${bar('矢視当て', byKind.get('view'))}</section>
+        <section class="card"><h2>問題タイプ別</h2>${(Object.keys(KIND_LABEL) as Kind[]).map((k) => bar(KIND_LABEL[k], byKind.get(k))).join('')}</section>
         <section class="card"><h2>形状カテゴリ別</h2>${(Object.keys(CATEGORY_LABEL) as Category[]).map((c) => bar(CATEGORY_LABEL[c], byCat.get(c))).join('')}</section>
         <section class="card"><h2>苦手な形状</h2>${weak.length ? weak.map(([id, a]) => bar(esc(SHAPES.find((s) => s.id === id)?.name ?? id), a)).join('') : '<p class="muted">まだデータがありません</p>'}</section>
         <section class="card"><h2>最近のスコア</h2>
@@ -314,6 +389,7 @@ export class App {
       </div>`;
     this.mountStage(this.root.querySelector('.stage-slot')!);
     this.viewer.setInteractive(true);
+    this.showBoard(false);
     this.root.querySelector('#back')!.addEventListener('click', () => this.home());
     this.root.querySelector('#reset')!.addEventListener('click', () => this.viewer.resetCamera());
     const show = (id: string) => {
@@ -342,6 +418,12 @@ export class App {
           <p>赤い面で立体を切ったとき、<b>矢印の向きに見た断面</b>を4つから選びます。斜線（ハッチング）の部分が切り口です。回答後、手前側が外れて切り口がオレンジ色で表示されます。</p>
           <h2>矢視当て</h2>
           <p><b>矢印Aの方向から見た図</b>を選びます。図は<b>第三角法</b>の考え方で、見えない稜線は<b>隠れ線（破線）</b>で描かれています。</p>
+          <h2>三面図（3形式）</h2>
+          <p><b>三面図→立体</b>：第三角法の三面図（平面図は上、右側面図は右）に合う立体を選びます。<br>
+          <b>不足する1面</b>：2つの図から「？」に入る図を選びます。<br>
+          <b>誤り探し</b>：立体と三面図を見比べ、誤っている図を1つ選びます。</p>
+          <h2>ヒント</h2>
+          <p>断面当てでは<b>切断線</b>（切断面と立体表面の交わる線のうち見える部分）、矢視当てでは<b>透視表示</b>が出ます。使うとその問題の得点が半分になり、苦手として記録されます。</p>
           <h2>座標系</h2>
           <p>Z軸が上です。正面図は −Y側から +Y方向を、平面図は上から、右側面図は +X側から見た図です。</p>
           <h2>操作</h2>

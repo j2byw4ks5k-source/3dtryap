@@ -82,3 +82,39 @@ export function sectionSVG(p: Polys, span: number, opts: { cls?: string } = {}):
     `<path d="${dPath}" fill="url(#${id})" fill-rule="evenodd" stroke="currentColor" stroke-width="${(span * 0.018).toFixed(3)}" stroke-linejoin="round"/>` +
     `</svg>`;
 }
+
+export interface BoardItem {
+  dr?: Drawing; // 省略時は「？」枠
+  box: [number, number, number, number]; // 図の範囲（図の座標）
+  at: [number, number]; // 配置先（左下）
+  label: string;
+}
+
+/** 三面図ボード：複数の図を整列配置して1枚の SVG に */
+export function boardSVG(items: BoardItem[]): string {
+  let W = 0, H = 0;
+  for (const it of items) {
+    W = Math.max(W, it.at[0] + it.box[2] - it.box[0]);
+    H = Math.max(H, it.at[1] + it.box[3] - it.box[1]);
+  }
+  const span = Math.max(W, H);
+  const m = span * 0.08;
+  const sw = span * 0.012;
+  let body = '';
+  for (const it of items) {
+    const dx = it.at[0] - it.box[0], dy = it.at[1] - it.box[1];
+    const w = it.box[2] - it.box[0], h = it.box[3] - it.box[1];
+    const fs = span * 0.045;
+    body += `<text x="${(it.at[0]).toFixed(2)}" y="${(-(it.at[1] + h) - fs * 0.5).toFixed(2)}" font-size="${fs.toFixed(2)}" fill="currentColor" opacity="0.6">${it.label}</text>`;
+    if (!it.dr) {
+      body += `<rect x="${it.at[0].toFixed(2)}" y="${(-(it.at[1] + h)).toFixed(2)}" width="${w.toFixed(2)}" height="${h.toFixed(2)}" fill="none" stroke="var(--arrow, #ff6d00)" stroke-width="${sw}" stroke-dasharray="${span * 0.02} ${span * 0.015}" rx="${span * 0.01}"/>` +
+        `<text x="${(it.at[0] + w / 2).toFixed(2)}" y="${(-(it.at[1] + h / 2) + span * 0.04).toFixed(2)}" font-size="${(span * 0.12).toFixed(2)}" text-anchor="middle" fill="var(--arrow, #ff6d00)" font-weight="700">?</text>`;
+      continue;
+    }
+    const tr = (p: V2): V2 => [p[0] + dx, p[1] + dy];
+    const path = (lines: V2[][]) => lines.map((l) => 'M' + l.map((p) => { const [x, y] = tr(p); return `${x.toFixed(2)} ${(-y).toFixed(2)}`; }).join('L')).join('');
+    body += `<path d="${path(chain(it.dr.segs.filter((s) => s.hidden)))}" fill="none" stroke="currentColor" stroke-width="${(span * 0.008).toFixed(3)}" stroke-dasharray="${(span * 0.02).toFixed(2)} ${(span * 0.014).toFixed(2)}"/>`;
+    body += `<path d="${path(chain(it.dr.segs.filter((s) => !s.hidden)))}" fill="none" stroke="currentColor" stroke-width="${(span * 0.013).toFixed(3)}" stroke-linecap="round" stroke-linejoin="round"/>`;
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" class="board-svg" viewBox="${(-m).toFixed(2)} ${(-H - m).toFixed(2)} ${(W + 2 * m).toFixed(2)} ${(H + 2 * m).toFixed(2)}">${body}</svg>`;
+}

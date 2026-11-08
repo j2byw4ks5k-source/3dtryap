@@ -111,3 +111,20 @@ h2 { font-size: .85rem; color: var(--muted); margin: 14px 0 6px; font-weight: 60
 .gchip i { font-style: normal; color: #f9a825; margin-left: 4px; font-size: .65rem; }
 .gchip.on { background: var(--accent); color: var(--accent-fg); }
 .help p { line-height: 1.7; margin: 4px 0; }
+
+/* 三面図ボード（3D の上に重ねる） */
+.board { position: absolute; inset: 0; background: var(--fig); color: var(--figfg); display: grid; place-items: center; padding: 8px; }
+.board[hidden] { display: none; }
+.board .board-svg { width: 100%; height: 100%; }
+.snap { width: 100%; aspect-ratio: 1; object-fit: contain; display: block; }
+.opts.three { grid-template-columns: 1fr 1fr; }
+.opts.three .opt:nth-child(1) { grid-column: 1; }
+.opts.three .opt:nth-child(2) { grid-column: 1; }
+.opts.three .opt:nth-child(3) { grid-column: 2; grid-row: 2; }
+.opts.three .opt .lbl { position: static; text-align: left; }
+.chip.hint { color: var(--arrow); border-color: color-mix(in srgb, var(--arrow) 50%, var(--line)); }
+.chip[hidden] { display: none; }
+.reveal-name { text-align: center; font-weight: 700; margin-top: 4px; }
+.mi-board { background: var(--fig); color: var(--figfg); border-radius: 8px; padding: 4px; margin-bottom: 6px; }
+.mi-board svg { width: 100%; height: 180px; }
+.seg button { font-size: .85rem; }

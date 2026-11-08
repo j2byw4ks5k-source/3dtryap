@@ -5,10 +5,38 @@ import type { Manifold } from 'manifold-3d';
 import { toTriMesh, bboxOf, type TriMesh } from '../geometry/mesh';
 import { featureEdgePositions } from '../geometry/hlr';
 import type { Frame } from '../geometry/frame';
+import type { Polys } from '../geometry/section';
+import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 
 const css = (name: string, fb: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fb;
+
+export function modelObject(t: TriMesh, opts: { color?: string; opacity?: number; edges?: boolean } = {}) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(t.pos, 3));
+  g.setIndex(new THREE.BufferAttribute(t.idx, 1));
+  const ng = g.toNonIndexed();
+  ng.computeVertexNormals();
+  g.dispose();
+  const op = opts.opacity ?? 1;
+  const mat = new THREE.MeshStandardMaterial({
+    color: opts.color ?? css('--model', '#8fb3d9'), roughness: 0.55, metalness: 0.1, flatShading: true,
+    transparent: op < 1, opacity: op, depthWrite: op >= 1, side: THREE.DoubleSide,
+    polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
+  });
+  const grp = new THREE.Group();
+  grp.add(new THREE.Mesh(ng, mat));
+  if (opts.edges !== false) {
+    const eg = new THREE.BufferGeometry();
+    eg.setAttribute('position', new THREE.BufferAttribute(featureEdgePositions(t), 3));
+    grp.add(new THREE.LineSegments(eg, new THREE.LineBasicMaterial({ color: css('--edge', '#1b2733'), transparent: op < 1, opacity: Math.min(1, op * 1.6) })));
+  }
+  return grp;
+}
+
 
 export class Viewer3D {
   readonly renderer: THREE.WebGLRenderer;
@@ -121,36 +149,13 @@ export class Viewer3D {
     this.dirty = true;
   }
 
-  private meshObj(t: TriMesh, opts: { color?: string; opacity?: number; edges?: boolean } = {}) {
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(t.pos, 3));
-    g.setIndex(new THREE.BufferAttribute(t.idx, 1));
-    const ng = g.toNonIndexed();
-    ng.computeVertexNormals();
-    g.dispose();
-    const op = opts.opacity ?? 1;
-    const mat = new THREE.MeshStandardMaterial({
-      color: opts.color ?? css('--model', '#8fb3d9'), roughness: 0.55, metalness: 0.1, flatShading: true,
-      transparent: op < 1, opacity: op, depthWrite: op >= 1, side: THREE.DoubleSide,
-      polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
-    });
-    const grp = new THREE.Group();
-    grp.add(new THREE.Mesh(ng, mat));
-    if (opts.edges !== false) {
-      const eg = new THREE.BufferGeometry();
-      eg.setAttribute('position', new THREE.BufferAttribute(featureEdgePositions(t), 3));
-      grp.add(new THREE.LineSegments(eg, new THREE.LineBasicMaterial({ color: css('--edge', '#1b2733'), transparent: op < 1, opacity: Math.min(1, op * 1.6) })));
-    }
-    return grp;
-  }
-
   /** 形状を表示し、標準の等角方向にカメラを置く */
   setShape(mesh: TriMesh) {
     this.clear();
     const bb = bboxOf(mesh);
     this.size = bb.size;
     this.center.set((bb.min[0] + bb.max[0]) / 2, (bb.min[1] + bb.max[1]) / 2, (bb.min[2] + bb.max[2]) / 2);
-    this.root.add(this.meshObj(mesh));
+    this.root.add(modelObject(mesh));
     this.resetCamera();
     this.resize();
   }
@@ -232,13 +237,13 @@ export class Viewer3D {
       }
       (onPlane ? capIdx : restIdx).push(km.idx[t], km.idx[t + 1], km.idx[t + 2]);
     }
-    this.root.add(this.meshObj({ pos: km.pos, idx: new Uint32Array(restIdx) }, { edges: false }));
-    this.root.add(this.meshObj({ pos: km.pos, idx: new Uint32Array(capIdx) }, { color: css('--cap', '#ff7043'), edges: false }));
+    this.root.add(modelObject({ pos: km.pos, idx: new Uint32Array(restIdx) }, { edges: false }));
+    this.root.add(modelObject({ pos: km.pos, idx: new Uint32Array(capIdx) }, { color: css('--cap', '#ff7043'), edges: false }));
     const edges = new THREE.BufferGeometry();
     edges.setAttribute('position', new THREE.BufferAttribute(featureEdgePositions(km), 3));
     this.root.add(new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: css('--edge', '#1b2733') })));
     // 取り除いた側はゴーストで、法線方向へ離していく
-    const ghost = this.meshObj(gm, { opacity: 0.18 });
+    const ghost = modelObject(gm, { opacity: 0.18 });
     this.root.add(ghost);
     const t0 = performance.now();
     const nv = new THREE.Vector3(...n);
@@ -274,7 +279,81 @@ export class Viewer3D {
     };
   }
 
+  /** ヒント：切断面と立体表面の交線（見える部分のみ）を太線で表示 */
+  showCutLines(polys: Polys, f: Frame, d: number) {
+    const pts: number[] = [];
+    const w = (x: number, y: number) => [0, 1, 2].map((k) => f.u[k] * x + f.v[k] * y + f.n[k] * d);
+    for (const q of polys)
+      for (let i = 0; i < q.length; i++) {
+        const a = q[i], b = q[(i + 1) % q.length];
+        pts.push(...w(a[0], a[1]), ...w(b[0], b[1]));
+      }
+    const g = new LineSegmentsGeometry();
+    g.setPositions(pts);
+    const mat = new LineMaterial({ color: new THREE.Color(css('--plane', '#e53935')).getHex(), linewidth: 4, worldUnits: false });
+    mat.resolution.set(this.host.clientWidth, this.host.clientHeight);
+    const line = new LineSegments2(g, mat);
+    line.renderOrder = 3;
+    this.root.add(line);
+    this.dirty = true;
+  }
+
+  /** ヒント：透視表示（形状を半透明にし、稜線を奥まで表示） */
+  setXray(on: boolean) {
+    this.root.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (mesh.isMesh && mesh.material instanceof THREE.MeshStandardMaterial) {
+        mesh.material.transparent = on;
+        mesh.material.opacity = on ? 0.25 : 1;
+        mesh.material.depthWrite = !on;
+        mesh.material.needsUpdate = true;
+      }
+      const ls = o as THREE.LineSegments;
+      if (ls.isLineSegments && !(o instanceof LineSegments2) && ls.material instanceof THREE.LineBasicMaterial && o.parent?.children.some((c) => (c as THREE.Mesh).isMesh)) {
+        ls.material.depthTest = !on;
+        ls.renderOrder = on ? 4 : 0;
+        ls.material.needsUpdate = true;
+      }
+    });
+    this.dirty = true;
+  }
+
   setInteractive(on: boolean) {
     this.controls.enabled = on;
+  }
+}
+
+/** 3D 形状を等角方向から描いた画像（選択肢用） */
+export class Snapshotter {
+  private renderer: THREE.WebGLRenderer;
+  private scene = new THREE.Scene();
+  private camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 5000);
+  private holder = new THREE.Group();
+  constructor(px = 320) {
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+    this.renderer.setPixelRatio(1);
+    this.renderer.setSize(px, px, false);
+    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x667788, 1.6));
+    const key = new THREE.DirectionalLight(0xffffff, 1.6);
+    key.position.set(0.4, 0.3, 1);
+    this.camera.add(key);
+    this.scene.add(this.camera, this.holder);
+  }
+  render(mesh: TriMesh): string {
+    this.holder.clear();
+    const obj = modelObject(mesh);
+    this.holder.add(obj);
+    const bb = bboxOf(mesh);
+    const c = new THREE.Vector3((bb.min[0] + bb.max[0]) / 2, (bb.min[1] + bb.max[1]) / 2, (bb.min[2] + bb.max[2]) / 2);
+    const s = bb.size * 0.82;
+    Object.assign(this.camera, { left: -s, right: s, top: s, bottom: -s });
+    this.camera.up.set(0, 0, 1);
+    this.camera.position.copy(c).add(new THREE.Vector3(1.0, -1.45, 0.95).setLength(bb.size * 4));
+    this.camera.lookAt(c);
+    this.camera.updateProjectionMatrix();
+    this.renderer.render(this.scene, this.camera);
+    const url = this.renderer.domElement.toDataURL('image/png');
+    obj.traverse((o) => { (o as THREE.Mesh).geometry?.dispose(); });
+    return url;
   }
 }

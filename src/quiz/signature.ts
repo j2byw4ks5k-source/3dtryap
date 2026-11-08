@@ -66,3 +66,6 @@ export function sigDiff(A: Sig, B: Sig): number {
 
 // 選択肢どうしが「見て明らかに違う」と言える最小差（小さすぎると正解と区別できない誤答になる）
 export const sameSig = (A: Sig, B: Sig) => sigDiff(A, B) < 0.12;
+
+/** 解説文で「同じ」と言い切るための厳しめ判定 */
+export const strictSame = (A: Sig, B: Sig) => sigDiff(A, B) < 0.04;

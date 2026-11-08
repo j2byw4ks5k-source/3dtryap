@@ -1,9 +1,11 @@
 // 学習記録（端末の localStorage。個人利用なのでサーバ不要）
 import type { Category } from '../shapes';
+import type { Kind } from '../quiz/generator';
 
 export interface Rec {
   t: number; // 回答時刻
-  k: 'section' | 'view';
+  k: Kind;
+  h?: boolean; // ヒント使用
   s: string; // 形状 ID
   c: Category;
   lv: number;
@@ -49,12 +51,12 @@ export const history = {
     return isBest;
   },
   /** 苦手な形状ほど出やすくする重み（直近の誤答で増、正答で減） */
-  weights(kind?: 'section' | 'view') {
+  weights(kinds?: Kind[]) {
     const w = new Map<string, number>();
     for (const r of data.recs.slice(-600)) {
-      if (kind && r.k !== kind) continue;
+      if (kinds && !kinds.includes(r.k)) continue;
       const cur = w.get(r.s) ?? 1;
-      w.set(r.s, Math.min(6, Math.max(0.4, r.ok ? cur * 0.8 : cur + 2)));
+      w.set(r.s, Math.min(6, Math.max(0.4, r.ok && !r.h ? cur * 0.8 : cur + (r.ok ? 0.5 : 2))));
     }
     return w;
   },
