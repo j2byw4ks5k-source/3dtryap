@@ -8,14 +8,15 @@ import { makeFrame, viewFrame } from '../src/geometry/frame';
 import { sectionPolys, polysArea } from '../src/geometry/section';
 import { makeQuestion, type Kind } from '../src/quiz/generator';
 import { makeVariants, mirrorMeshX } from '../src/quiz/ortho';
+import { rotateMesh } from '../src/quiz/advanced';
 
 let w: ManifoldToplevel;
 beforeAll(async () => { w = await initKernel(); });
 const shape = (id: string) => buildShape(w, SHAPES.find((s) => s.id === id)!);
 
 describe('形状ライブラリ', () => {
-  it('100個以上・ID重複なし・全て1つの正常な立体', () => {
-    expect(SHAPES.length).toBeGreaterThanOrEqual(100);
+  it('150個以上・ID重複なし・全て1つの正常な立体', () => {
+    expect(SHAPES.length).toBeGreaterThanOrEqual(150);
     expect(new Set(SHAPES.map((s) => s.id)).size).toBe(SHAPES.length);
     for (const d of SHAPES) {
       const m = buildShape(w, d);
@@ -73,8 +74,8 @@ describe('断面', () => {
 
 describe('問題生成', () => {
   it('各モード・難易度で4択・正解1つ', () => {
-    for (const kind of ['section', 'view', 'ortho3d', 'missing', 'wrongview'] as Kind[])
-      for (const lv of [1, 2, 3] as const)
+    for (const kind of ['section', 'view', 'ortho3d', 'missing', 'wrongview', 'rotate', 'aux', 'points'] as Kind[])
+      for (const lv of [1, 2, 3, 4] as const)
         for (let i = 0; i < 5; i++) {
           const q = makeQuestion(w, kind, lv);
           expect(q.options.length, kind).toBe(kind === 'wrongview' ? 3 : 4);
@@ -103,5 +104,23 @@ describe('三面図系の補助', () => {
     const def = SHAPES.find((s) => s.id === 'A02')!;
     const vs = makeVariants(w, def, 4);
     expect(vs.length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe('応用問題の補助', () => {
+  it('回転は右ねじが正（空間固定軸）', () => {
+    const t = { pos: new Float32Array([12, 0, 0, 0, 0, 10]), idx: new Uint32Array([]) };
+    const z = rotateMesh(t, [{ axis: 'z', deg: 90 }]).pos;
+    expect([z[0], z[1]].map((v) => Math.round(v))).toEqual([0, 12]); // X → Y
+    const x = rotateMesh(t, [{ axis: 'x', deg: 90 }]).pos;
+    expect([x[4], x[5]].map((v) => Math.round(v))).toEqual([-10, 0]); // Z → −Y
+    const y = rotateMesh(t, [{ axis: 'y', deg: 90 }]).pos;
+    expect([y[3], y[5]].map((v) => Math.round(v))).toEqual([10, 0]); // Z → X
+  });
+  it('3点を通る断面：3点はすべて切断面上にある', () => {
+    for (let i = 0; i < 10; i++) {
+      const q = makeQuestion(w, 'points', 3);
+      for (const p of q.points!) expect(p[0] * q.frame.n[0] + p[1] * q.frame.n[1] + p[2] * q.frame.n[2]).toBeCloseTo(q.d!, 3);
+    }
   });
 });

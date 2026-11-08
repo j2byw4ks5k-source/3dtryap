@@ -98,7 +98,7 @@ function bbOfMesh(t: TriMesh) {
   return { min, max };
 }
 
-export function makeVariants(w: ManifoldToplevel, def: ShapeDef, n: number): Variant[] {
+export function makeVariants(w: ManifoldToplevel, def: ShapeDef, n: number, k = 0.4): Variant[] {
   const b = getBuilt(w, def);
   const { Manifold } = w;
   const [x0, y0, z0] = b.bb.min, [x1, y1, z1] = b.bb.max;
@@ -107,14 +107,14 @@ export function makeVariants(w: ManifoldToplevel, def: ShapeDef, n: number): Var
   const sx = rnd([-1, 1]), sy = rnd([-1, 1]), sz = rnd([1, 1, -1]);
   const makers: (() => { m: import('manifold-3d').Manifold; desc: string })[] = [
     () => { // 角の切欠き
-      const c = Manifold.cube([W * 0.4, D * 0.4, H * 0.4], true);
+      const c = Manifold.cube([W * k, D * k, H * k], true);
       const t = c.translate([sx > 0 ? x1 : x0, sy > 0 ? y1 : y0, sz > 0 ? z1 : z0]);
       const m = b.m.subtract(t); c.delete(); t.delete();
       return { m, desc: '角に切欠きがある' };
     },
     () => { // 稜の面取り（X 方向または Y 方向の上側の稜）
       const alongX = Math.random() < 0.5;
-      const c = 0.35 * Math.min(alongX ? D : W, H);
+      const c = 0.875 * k * Math.min(alongX ? D : W, H);
       const nn: [number, number, number] = alongX ? [0, -sy, -sz] : [-sx, 0, -sz];
       const l = Math.SQRT2;
       const p0 = alongX ? sy * (sy > 0 ? y1 : y0) + sz * (sz > 0 ? z1 : z0) : sx * (sx > 0 ? x1 : x0) + sz * (sz > 0 ? z1 : z0);
@@ -123,7 +123,7 @@ export function makeVariants(w: ManifoldToplevel, def: ShapeDef, n: number): Var
     },
     () => { // 中央の貫通穴（ランダムな軸）
       const ax = rnd(['x', 'y', 'z'] as const);
-      const r = 0.16 * (ax === 'x' ? Math.min(D, H) : ax === 'y' ? Math.min(W, H) : Math.min(W, D));
+      const r = 0.4 * k * (ax === 'x' ? Math.min(D, H) : ax === 'y' ? Math.min(W, H) : Math.min(W, D));
       const L = Math.max(W, D, H) * 3;
       const c = Manifold.cylinder(L, r, r, 48, true);
       const rc = ax === 'z' ? c.translate([cx, cy, cz]) : ax === 'x' ? c.rotate([0, 90, 0]).translate([cx, cy, cz]) : c.rotate([90, 0, 0]).translate([cx, cy, cz]);
@@ -132,7 +132,7 @@ export function makeVariants(w: ManifoldToplevel, def: ShapeDef, n: number): Var
     },
     () => { // 上面の溝
       const alongX = Math.random() < 0.5;
-      const c = Manifold.cube(alongX ? [W * 3, D * 0.3, H * 0.4] : [W * 0.3, D * 3, H * 0.4], true);
+      const c = Manifold.cube(alongX ? [W * 3, D * 0.75 * k, H * k] : [W * 0.75 * k, D * 3, H * k], true);
       const t = c.translate([cx, cy, z1]);
       const m = b.m.subtract(t); c.delete(); t.delete();
       return { m, desc: '上面に溝がある' };
@@ -161,8 +161,9 @@ export function makeOrtho3DQuestion(w: ManifoldToplevel, level: Level, weights?:
   const cands: C[] = [];
   // 正解を少し変えた立体（1〜2面だけ一致するものほど紛らわしい）
   const nVar = level === 1 ? 1 : level === 2 ? 2 : 3;
+  const vScale = level === 4 ? 0.25 : 0.4; // エキスパートは変形を小さく（紛らわしく）
   const vars: C[] = [];
-  for (const va of makeVariants(w, def, 4)) {
+  for (const va of makeVariants(w, def, 4, vScale)) {
     if (same(v, va.vs).length === 3) continue;
     const sm = sameStrict(v, va.vs);
     const diff = SLOTS.filter((s) => !sm.includes(s));

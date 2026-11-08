@@ -38,12 +38,24 @@ export function modelObject(t: TriMesh, opts: { color?: string; opacity?: number
 }
 
 
+function labelSprite(text: string, color: string, w = 64) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = 64;
+  const g = c.getContext('2d')!;
+  g.fillStyle = color; g.font = 'bold 44px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(text, w / 2, 34);
+  return new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false }));
+}
+
 export class Viewer3D {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 5000);
   readonly controls: OrbitControls;
   private root = new THREE.Group();
+  /** 形状本体（回転アニメーション用に注記類と分ける） */
+  private model = new THREE.Group();
+  private rotDone = 0;
   private center = new THREE.Vector3();
   private size = 50;
   private dirty = true;
@@ -58,6 +70,7 @@ export class Viewer3D {
     this.renderer.localClippingEnabled = true;
     host.appendChild(this.renderer.domElement);
     this.scene.add(this.root);
+    this.root.add(this.model);
     this.scene.add(new THREE.HemisphereLight(0xffffff, 0x667788, 1.6));
     const key = new THREE.DirectionalLight(0xffffff, 1.6);
     key.position.set(0.4, 0.3, 1);
@@ -75,9 +88,16 @@ export class Viewer3D {
     new ResizeObserver(() => this.resize()).observe(host);
     this.resize();
     const loop = (t: number) => {
-      if (this.anim && !this.anim(t)) this.anim = null;
+      requestAnimationFrame(loop); // 例外が起きても描画ループを止めない
+      const a = this.anim;
+      try {
+        // アニメーション中に次のアニメーションが登録された場合は消さない
+        if (a && !a(t) && this.anim === a) this.anim = null;
+      } catch (e) {
+        console.error(e);
+        if (this.anim === a) this.anim = null;
+      }
       if (this.dirty || this.anim) this.draw();
-      requestAnimationFrame(loop);
     };
     requestAnimationFrame(loop);
   }
@@ -146,6 +166,9 @@ export class Viewer3D {
       if (Array.isArray(mat)) mat.forEach((x) => x.dispose()); else mat?.dispose();
     });
     this.root.clear();
+    this.model = new THREE.Group();
+    this.root.add(this.model);
+    this.rotDone = 0;
     this.dirty = true;
   }
 
@@ -155,7 +178,7 @@ export class Viewer3D {
     const bb = bboxOf(mesh);
     this.size = bb.size;
     this.center.set((bb.min[0] + bb.max[0]) / 2, (bb.min[1] + bb.max[1]) / 2, (bb.min[2] + bb.max[2]) / 2);
-    this.root.add(modelObject(mesh));
+    this.model.add(modelObject(mesh));
     this.resetCamera();
     this.resize();
   }
@@ -248,7 +271,7 @@ export class Viewer3D {
     const t0 = performance.now();
     const nv = new THREE.Vector3(...n);
     this.anim = (t) => {
-      const k = Math.min(1, (t - t0) / 700);
+      const k = Math.min(1, Math.max(0, (t - t0) / 700));
       ghost.position.copy(nv).multiplyScalar(this.size * 0.6 * (1 - Math.pow(1 - k, 3)));
       return k < 1;
     };
@@ -268,7 +291,7 @@ export class Viewer3D {
     const prev = this.anim;
     this.anim = (t) => {
       const alive = prev ? prev(t) : false;
-      const k = Math.min(1, (t - t0) / 800);
+      const k = Math.min(1, Math.max(0, (t - t0) / 800));
       const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
       const dir = from.clone().lerp(target, e).normalize();
       this.camera.position.copy(this.center).add(dir.multiplyScalar(dist));
@@ -317,6 +340,90 @@ export class Viewer3D {
     });
     this.dirty = true;
   }
+
+  /** 立体上の点（P, Q, R など） */
+  addPoints(pts: [number, number, number][], labels: string[]) {
+    const color = css('--plane', '#e53935');
+    pts.forEach((p, i) => {
+      // 見えている点は濃く、立体の裏に隠れた点は薄く表示
+      const geo = new THREE.SphereGeometry(this.size * 0.028, 16, 12);
+      const front = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color }));
+      const behind = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.3 }));
+      front.position.set(...p);
+      behind.position.set(...p);
+      behind.renderOrder = 5;
+      this.root.add(front, behind);
+      const sp = labelSprite(labels[i], color);
+      sp.position.set(p[0], p[1], p[2] + this.size * 0.09);
+      sp.scale.setScalar(this.size * 0.16);
+      this.root.add(sp);
+    });
+    this.dirty = true;
+  }
+
+  /** 回転指示：軸（色付き）と、右ねじの向きを示す曲がった矢印 */
+  addRotationIndicator(rots: { axis: 'x' | 'y' | 'z'; deg: number }[]) {
+    const AX: Record<string, [THREE.Vector3, number]> = {
+      x: [new THREE.Vector3(1, 0, 0), 0xe53935], y: [new THREE.Vector3(0, 1, 0), 0x43a047], z: [new THREE.Vector3(0, 0, 1), 0x1e88e5],
+    };
+    rots.forEach((r, i) => {
+      const [v, color] = AX[r.axis];
+      const L = this.size * 0.75;
+      const mat = new THREE.MeshBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.9 });
+      const axisLine = new THREE.Mesh(new THREE.CylinderGeometry(this.size * 0.008, this.size * 0.008, L * 2, 8), mat);
+      axisLine.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), v);
+      axisLine.position.copy(this.center);
+      axisLine.renderOrder = 5;
+      const R = this.size * 0.16, tube = this.size * 0.014, arc = Math.PI * 1.4;
+      const g = new THREE.Group();
+      g.add(new THREE.Mesh(new THREE.TorusGeometry(R, tube, 8, 40, arc), mat));
+      const head = new THREE.Mesh(new THREE.ConeGeometry(tube * 3, tube * 7, 12), mat);
+      const pos = r.deg > 0 ? arc : 0;
+      head.position.set(R * Math.cos(pos), R * Math.sin(pos), 0);
+      const tan = r.deg > 0 ? new THREE.Vector3(-Math.sin(pos), Math.cos(pos), 0) : new THREE.Vector3(0, -1, 0);
+      head.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), tan);
+      g.add(head);
+      g.children.forEach((c) => (c.renderOrder = 5));
+      g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), v);
+      g.position.copy(this.center).addScaledVector(v, L * (1 - i * 0.25));
+      const lbl = labelSprite(`${rots.length > 1 ? '①②'[i] : ''}${r.deg > 0 ? '+' : '−'}${Math.abs(r.deg)}°`, '#' + color.toString(16).padStart(6, '0'), 160);
+      lbl.position.copy(this.center).addScaledVector(v, L * (1 - i * 0.25) + this.size * 0.2);
+      lbl.scale.set(this.size * 0.42, this.size * 0.21, 1);
+      this.root.add(axisLine, g, lbl);
+    });
+    this.dirty = true;
+  }
+
+  /** 形状を回転させるアニメーション（空間に固定した軸まわり、順番に） */
+  animateRotation(rots: { axis: 'x' | 'y' | 'z'; deg: number }[], then?: () => void) {
+    const AXV = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
+    const qs = rots.map((r) => new THREE.Quaternion().setFromAxisAngle(AXV[r.axis], (r.deg * Math.PI) / 180));
+    const start = this.rotDone >= rots.length ? 0 : this.rotDone;
+    if (start === 0) { this.model.quaternion.identity(); this.model.position.set(0, 0, 0); }
+    const apply = (q: THREE.Quaternion) => {
+      this.model.quaternion.copy(q);
+      this.model.position.copy(this.center).sub(this.center.clone().applyQuaternion(q));
+    };
+    const STEP = 900;
+    const t0 = performance.now();
+    this.anim = (t) => {
+      // rAF の時刻は登録時刻より前のことがあるので 0 未満にしない
+      const k = Math.max(0, (t - t0) / STEP);
+      const i = Math.min(rots.length - 1, start + Math.floor(k));
+      const e = Math.min(1, k - (i - start));
+      const ee = e < 0.5 ? 2 * e * e : 1 - Math.pow(-2 * e + 2, 2) / 2;
+      let q = new THREE.Quaternion();
+      for (let j = 0; j < i; j++) q = qs[j].clone().multiply(q);
+      q = new THREE.Quaternion().slerpQuaternions(new THREE.Quaternion(), qs[i], ee).multiply(q);
+      apply(q);
+      const done = k >= rots.length - start;
+      if (done) { this.rotDone = rots.length; then?.(); }
+      return !done;
+    };
+    this.dirty = true;
+  }
+
+  get rotated() { return this.rotDone > 0; }
 
   setInteractive(on: boolean) {
     this.controls.enabled = on;

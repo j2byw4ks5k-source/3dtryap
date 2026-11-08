@@ -1,7 +1,7 @@
 import type { Manifold } from 'manifold-3d';
 import type { DSL } from './dsl';
 
-export type Category = 'basic' | 'step' | 'hole' | 'part' | 'revolve' | 'intersect' | 'puzzle';
+export type Category = 'basic' | 'step' | 'hole' | 'part' | 'revolve' | 'intersect' | 'puzzle' | 'expert';
 export const CATEGORY_LABEL: Record<Category, string> = {
   basic: '基本立体',
   step: '段付き・切欠き',
@@ -10,6 +10,7 @@ export const CATEGORY_LABEL: Record<Category, string> = {
   revolve: '回転体',
   intersect: '相貫体',
   puzzle: 'パズル',
+  expert: '上級部品',
 };
 
 export interface ShapeDef {
