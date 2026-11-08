@@ -1,0 +1,130 @@
+:root {
+  --bg: #f4f6f9; --fg: #14202b; --muted: #6b7785; --card: #ffffff; --line: #d9dee5;
+  --accent: #1565c0; --accent-fg: #fff; --ok: #2e7d32; --ng: #c62828;
+  --stage: #e8edf3; --fig: #ffffff; --figfg: #111;
+  --model: #8fb3d9; --edge: #1b2733; --plane: #e53935; --arrow: #ff6d00; --cap: #ff7043;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1720; --fg: #e6edf3; --muted: #93a1b0; --card: #18222d; --line: #2a3644;
+    --accent: #4f9dff; --accent-fg: #06121f; --ok: #5cc26a; --ng: #ff6b6b;
+    --stage: #1c2833; --fig: #f6f7f9; --figfg: #111;
+    --model: #7fa6cf; --edge: #0b1219;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; background: var(--bg); color: var(--fg); font-family: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; }
+body { overscroll-behavior: none; }
+button { font: inherit; color: inherit; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; cursor: pointer; touch-action: manipulation; }
+button:disabled { cursor: default; }
+h1 { font-size: 1.25rem; margin: 0; }
+h2 { font-size: .85rem; color: var(--muted); margin: 14px 0 6px; font-weight: 600; }
+.loading { display: grid; place-items: center; min-height: 100vh; color: var(--muted); text-align: center; padding: 16px; }
+.screen { max-width: 560px; margin: 0 auto; padding: 0 16px calc(24px + env(safe-area-inset-bottom)); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 4px 14px 14px; margin: 12px 0; }
+.muted { color: var(--muted); }
+.row { display: flex; gap: 10px; margin-top: 10px; }
+.row > * { flex: 1; }
+.primary { background: var(--accent); color: var(--accent-fg); border-color: transparent; font-weight: 700; }
+.big { padding: 14px; font-size: 1.05rem; width: 100%; margin-top: 14px; }
+.danger { width: 100%; color: var(--ng); margin-top: 8px; }
+
+/* ホーム */
+.hero { padding: calc(20px + env(safe-area-inset-top)) 0 4px; }
+.hero h1 { font-size: 1.6rem; }
+.hero p { margin: 4px 0 0; color: var(--muted); }
+.seg { display: flex; background: var(--bg); border-radius: 10px; padding: 3px; gap: 3px; }
+.seg button { flex: 1; border: none; background: transparent; padding: 10px 4px; font-size: .9rem; }
+.seg button.on { background: var(--card); box-shadow: 0 1px 3px #0003; font-weight: 700; color: var(--accent); }
+.chk { display: flex; gap: 8px; align-items: center; margin-top: 14px; font-size: .9rem; }
+.chk input { width: 20px; height: 20px; }
+.best { text-align: center; color: var(--muted); margin: 10px 0 0; font-size: .9rem; }
+.links { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.links button { display: flex; flex-direction: column; gap: 2px; font-size: .9rem; }
+.links small { color: var(--muted); font-size: .7rem; }
+
+/* ゲーム */
+.bar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 10px; padding: calc(8px + env(safe-area-inset-top)) 0 8px; background: var(--bg); }
+.bar h1 { flex: 1; text-align: center; font-size: 1.05rem; }
+.icon { width: 40px; height: 40px; padding: 0; border-radius: 50%; }
+.prog { font-weight: 700; flex: 1; }
+.score { font-weight: 700; color: var(--accent); }
+.time { font-variant-numeric: tabular-nums; min-width: 3.2em; text-align: right; color: var(--muted); }
+.stage { position: relative; width: 100%; height: min(42vh, 380px); background: var(--stage); border-radius: 14px; overflow: hidden; touch-action: none; }
+.stage canvas { display: block; }
+.tools { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.badge { flex: 1; font-size: .75rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chip { padding: 6px 10px; font-size: .8rem; border-radius: 999px; }
+.prompt { font-weight: 700; margin: 8px 0; font-size: .98rem; }
+.opts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.opt { position: relative; padding: 6px; background: var(--fig); color: var(--figfg); border: 2px solid var(--line); display: flex; flex-direction: column; align-items: stretch; }
+.opt svg { width: 100%; aspect-ratio: 1; display: block; }
+.opt .lbl { position: absolute; top: 4px; left: 8px; font-weight: 700; color: #667; font-size: .8rem; }
+.opt .note { font-size: .72rem; line-height: 1.3; color: #333; min-height: 0; }
+.opt.correct { border-color: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 35%, transparent); }
+.opt.correct .note { color: var(--ok); font-weight: 700; }
+.opt.wrong { border-color: var(--ng); }
+.opt.wrong .note { color: var(--ng); }
+.opt.dim { opacity: .75; }
+.feedback .res { margin-top: 10px; font-weight: 800; font-size: 1.15rem; text-align: center; }
+.res.ok { color: var(--ok); }
+.res.ng { color: var(--ng); }
+
+/* 結果 */
+.result { text-align: center; padding-top: calc(24px + env(safe-area-inset-top)); }
+.big-score { font-size: 3.4rem; font-weight: 800; color: var(--accent); }
+.big-score small { font-size: 1rem; }
+.best-badge { display: inline-block; background: var(--ok); color: #fff; padding: 4px 12px; border-radius: 999px; font-weight: 700; }
+.kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 16px 0; }
+.kpis div { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 4px; display: flex; flex-direction: column; }
+.kpis b { font-size: 1.2rem; }
+.kpis span { font-size: .75rem; color: var(--muted); }
+.miss { display: flex; flex-direction: column; gap: 10px; text-align: left; }
+.miss-item { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 8px; }
+.mi-h { font-size: .85rem; font-weight: 700; margin-bottom: 4px; }
+.mi-figs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.mi-figs > div { background: var(--fig); color: var(--figfg); border-radius: 8px; padding: 4px; display: flex; flex-direction: column; }
+.mi-figs span { font-size: .7rem; color: #555; }
+.mi-figs em { font-size: .7rem; color: #a33; font-style: normal; }
+.mi-figs svg { width: 100%; aspect-ratio: 1; }
+.perfect { font-size: 1.2rem; font-weight: 700; color: var(--ok); }
+
+/* 成績 */
+.bar-row { display: grid; grid-template-columns: 7.5em 1fr 3em; grid-template-rows: auto auto; column-gap: 8px; align-items: center; margin: 6px 0; font-size: .85rem; }
+.bl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bt { height: 10px; background: var(--bg); border-radius: 5px; overflow: hidden; }
+.bf { height: 100%; background: var(--accent); border-radius: 5px; }
+.bv { text-align: right; font-weight: 700; }
+.bn { grid-column: 2 / 4; font-size: .7rem; color: var(--muted); }
+.spark { display: flex; align-items: flex-end; gap: 3px; height: 80px; }
+.spark div { flex: 1; background: var(--accent); border-radius: 3px 3px 0 0; min-width: 4px; }
+
+/* ギャラリー */
+.views .third { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.vfig { background: var(--fig); color: var(--figfg); padding: 4px; display: flex; flex-direction: column; }
+.vfig span { font-size: .72rem; color: #555; text-align: left; }
+.vfig svg { width: 100%; aspect-ratio: 1; }
+.gchips { display: flex; flex-wrap: wrap; gap: 6px; }
+.gchip { padding: 6px 10px; font-size: .8rem; border-radius: 999px; }
+.gchip i { font-style: normal; color: #f9a825; margin-left: 4px; font-size: .65rem; }
+.gchip.on { background: var(--accent); color: var(--accent-fg); }
+.help p { line-height: 1.7; margin: 4px 0; }
+
+/* 三面図ボード（3D の上に重ねる） */
+.board { position: absolute; inset: 0; background: var(--fig); color: var(--figfg); display: grid; place-items: center; padding: 8px; }
+.board[hidden] { display: none; }
+.board .board-svg { width: 100%; height: 100%; }
+.snap { width: 100%; aspect-ratio: 1; object-fit: contain; display: block; }
+.opts.three { grid-template-columns: 1fr 1fr; }
+.opts.three .opt:nth-child(1) { grid-column: 1; }
+.opts.three .opt:nth-child(2) { grid-column: 1; }
+.opts.three .opt:nth-child(3) { grid-column: 2; grid-row: 2; }
+.opts.three .opt .lbl { position: static; text-align: left; }
+.chip.hint { color: var(--arrow); border-color: color-mix(in srgb, var(--arrow) 50%, var(--line)); }
+.chip[hidden] { display: none; }
+.reveal-name { text-align: center; font-weight: 700; margin-top: 4px; }
+.mi-board { background: var(--fig); color: var(--figfg); border-radius: 8px; padding: 4px; margin-bottom: 6px; }
+.mi-board svg { width: 100%; height: 180px; }
+.seg button { font-size: .85rem; }
