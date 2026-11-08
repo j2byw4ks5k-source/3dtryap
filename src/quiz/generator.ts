@@ -9,20 +9,25 @@ import { boundsOf, drawingPts, drawingSVG, polysPts, sectionSVG } from '../rende
 import { drawingSig, polysSig, sameSig, type Sig } from './signature';
 import { getBuilt, type Built } from './shapeCache';
 import { makeOrtho3DQuestion, makeMissingViewQuestion, makeWrongViewQuestion } from './ortho';
+import { makeRotateQuestion, makeAuxViewQuestion, makePointsSectionQuestion } from './advanced';
 
 import type { TriMesh } from '../geometry/mesh';
 
-export type Kind = 'section' | 'view' | 'ortho3d' | 'missing' | 'wrongview';
-export type Mode = 'section' | 'view' | 'ortho' | 'mix';
-export type Level = 1 | 2 | 3;
+export type Kind = 'section' | 'view' | 'ortho3d' | 'missing' | 'wrongview' | 'rotate' | 'aux' | 'points';
+export type Mode = 'section' | 'view' | 'ortho' | 'adv' | 'mix';
+export type Level = 1 | 2 | 3 | 4;
 export const KIND_LABEL: Record<Kind, string> = {
   section: '断面当て',
   view: '矢視当て',
   ortho3d: '三面図→立体',
   missing: '不足する1面',
   wrongview: '三面図の誤り探し',
+  rotate: '回転後の図',
+  aux: '斜め矢視',
+  points: '3点を通る断面',
 };
 export const ORTHO_KINDS: Kind[] = ['ortho3d', 'missing', 'wrongview'];
+export const ADV_KINDS: Kind[] = ['rotate', 'aux', 'points'];
 
 export interface Option {
   svg?: string; // 2D 図
@@ -48,6 +53,11 @@ export interface Question {
   showModel: boolean;
   /** 断面のヒント用（切断線） */
   polys?: Polys;
+  /** 3点を通る断面：立体上の3点 */
+  points?: V3[];
+  /** 回転後の図：回転軸と角度（右ねじ正） */
+  rot?: { axis: 'x' | 'y' | 'z'; deg: number };
+  rots?: { axis: 'x' | 'y' | 'z'; deg: number }[];
 }
 
 export const rnd = <T>(a: T[]) => a[Math.floor(Math.random() * a.length)];
@@ -62,15 +72,17 @@ export const shuffle = <T>(a: T[]) => {
 /** 苦手度の重み付きで形状を選ぶ（weights: id → 重み） */
 export function pickShape(level: Level, weights?: Map<string, number>, exclude?: string): ShapeDef {
   const pool = SHAPES.filter((s) => s.diff <= level && s.id !== exclude);
-  const ws = pool.map((s) => weights?.get(s.id) ?? 1);
+  // エキスパートでは上級部品・難しい形状を多めに
+  const boost = (s: ShapeDef) => (level === 4 ? (s.cat === 'expert' ? 3 : s.diff === 3 ? 2 : 0.5) : 1);
+  const ws = pool.map((s) => (weights?.get(s.id) ?? 1) * boost(s));
   let r = Math.random() * ws.reduce((a, b) => a + b, 0);
   for (let i = 0; i < pool.length; i++) if ((r -= ws[i]) <= 0) return pool[i];
   return pool[pool.length - 1];
 }
 
 // ---------- 断面 ----------
-const upFor = (n: V3): V3 => (Math.abs(n[2]) > 0.9 ? [0, n[2] > 0 ? 1 : -1, 0] : [0, 0, 1]);
-const AXIS_N: { n: V3; label: string }[] = [
+export const upFor = (n: V3): V3 => (Math.abs(n[2]) > 0.9 ? [0, n[2] > 0 ? 1 : -1, 0] : [0, 0, 1]);
+export const AXIS_N: { n: V3; label: string }[] = [
   { n: [0, -1, 0], label: '正面側から' },
   { n: [1, 0, 0], label: '右側から' },
   { n: [0, 0, 1], label: '上から' },
@@ -78,7 +90,7 @@ const AXIS_N: { n: V3; label: string }[] = [
   { n: [-1, 0, 0], label: '左側から' },
 ];
 
-function rangeAlong(b: Built, n: V3) {
+export function rangeAlong(b: Built, n: V3) {
   let lo = Infinity, hi = -Infinity;
   const p = b.mesh.pos;
   for (let i = 0; i < p.length; i += 3) {
@@ -106,15 +118,18 @@ function candidateOffsets(b: Built, n: V3): number[] {
 
 interface SecCand { polys: Polys; sig?: Sig; note: string }
 
-function validSection(b: Built, f: Frame, d: number): Polys | null {
+export function validSection(b: Built, f: Frame, d: number): Polys | null {
   const p = sectionPolys(b.m, f, d);
-  return p.length && polysArea(p) > b.bb.size * b.bb.size * 0.01 ? p : null;
+  if (!p.length || polysArea(p) <= b.bb.size * b.bb.size * 0.01) return null;
+  // 細い切れ端（小さな外周）を含む断面は見づらいので使わない
+  if (p.some((q) => { const a = polysArea([q]); return a > 0 && a < b.bb.size * b.bb.size * 0.004; })) return null;
+  return p;
 }
 
-const mirrorPolys = (p: Polys): Polys => p.map((q) => q.map(([x, y]) => [-x, y] as [number, number]).reverse());
+export const mirrorPolys = (p: Polys): Polys => p.map((q) => q.map(([x, y]) => [-x, y] as [number, number]).reverse());
 
 function obliqueNormal(level: Level): { n: V3; label: string } {
-  const a = ((level === 3 ? rnd([30, 45, 60]) : rnd([30, 45])) * Math.PI) / 180;
+  const a = ((level >= 3 ? rnd([30, 45, 60]) : rnd([30, 45])) * Math.PI) / 180;
   const base = rnd(AXIS_N.slice(0, 3));
   // 基準法線を別の軸まわりに傾ける
   const n0 = base.n;
@@ -122,7 +137,7 @@ function obliqueNormal(level: Level): { n: V3; label: string } {
   if (Math.abs(n0[2]) > 0.5) n = rnd([[Math.sin(a), 0, Math.cos(a)], [0, -Math.sin(a), Math.cos(a)]] as V3[]);
   else if (Math.abs(n0[0]) > 0.5) n = rnd([[Math.cos(a), 0, Math.sin(a)], [Math.cos(a), -Math.sin(a), 0]] as V3[]);
   else n = rnd([[0, -Math.cos(a), Math.sin(a)], [Math.sin(a), -Math.cos(a), 0]] as V3[]);
-  if (level === 3 && Math.random() < 0.5) {
+  if (level >= 3 && Math.random() < (level === 4 ? 0.7 : 0.5)) {
     // 2軸傾斜（例：立方体の正六角形断面）
     const b = Math.PI / 5;
     n = [n[0] + Math.sin(b) * 0.6, n[1] - Math.sin(b) * 0.6, n[2] + 0.3];
@@ -135,7 +150,7 @@ function obliqueNormal(level: Level): { n: V3; label: string } {
 export function makeSectionQuestion(w: ManifoldToplevel, level: Level, weights?: Map<string, number>): Question | null {
   const def = pickShape(level, weights);
   const b = getBuilt(w, def);
-  const useOblique = level >= 2 && Math.random() < (level === 3 ? 0.55 : 0.3);
+  const useOblique = level >= 2 && Math.random() < (level === 4 ? 0.75 : level === 3 ? 0.55 : 0.3);
   const dir = useOblique ? obliqueNormal(level) : rnd(level === 1 ? AXIS_N.slice(0, 3) : AXIS_N);
   const f = makeFrame(dir.n, upFor(dir.n));
   let offsets = useOblique
@@ -201,6 +216,7 @@ const VIEW_POOL: Record<Level, ViewName[]> = {
   1: ['front', 'top', 'right'],
   2: ['front', 'top', 'right', 'left', 'back'],
   3: ['front', 'top', 'right', 'left', 'back', 'bottom'],
+  4: ['front', 'top', 'right', 'left', 'back', 'bottom'],
 };
 export const mirrorDrawing = (d: Drawing): Drawing => ({ segs: d.segs.map((s) => ({ a: [-s.a[0], s.a[1]], b: [-s.b[0], s.b[1]], hidden: s.hidden })) });
 
@@ -241,8 +257,9 @@ export function makeViewQuestion(w: ManifoldToplevel, level: Level, weights?: Ma
 }
 
 function kindFor(mode: Mode | Kind): Kind {
-  if (mode === 'mix') return rnd<Kind>(['section', 'section', 'view', 'view', 'ortho3d', 'missing', 'wrongview']);
+  if (mode === 'mix') return rnd<Kind>(['section', 'section', 'view', 'view', 'ortho3d', 'missing', 'wrongview', 'rotate', 'aux', 'points']);
   if (mode === 'ortho') return rnd(ORTHO_KINDS);
+  if (mode === 'adv') return rnd(ADV_KINDS);
   return mode;
 }
 
@@ -254,7 +271,10 @@ export function makeQuestion(w: ManifoldToplevel, mode: Mode | Kind, level: Leve
       : k === 'view' ? makeViewQuestion(w, level, weights)
       : k === 'ortho3d' ? makeOrtho3DQuestion(w, level, weights)
       : k === 'missing' ? makeMissingViewQuestion(w, level, weights)
-      : makeWrongViewQuestion(w, level, weights);
+      : k === 'wrongview' ? makeWrongViewQuestion(w, level, weights)
+      : k === 'rotate' ? makeRotateQuestion(w, level, weights)
+      : k === 'aux' ? makeAuxViewQuestion(w, level, weights)
+      : makePointsSectionQuestion(w, level, weights);
     if (q) return q;
   }
   throw new Error('問題を生成できませんでした');

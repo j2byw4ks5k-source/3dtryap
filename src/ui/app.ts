@@ -1,7 +1,7 @@
 // 画面遷移とゲーム進行
 import type { ManifoldToplevel } from 'manifold-3d';
 import { Snapshotter, Viewer3D } from '../render/viewer3d';
-import { KIND_LABEL, ORTHO_KINDS, makeQuestion, type Kind, type Level, type Mode, type Option, type Question } from '../quiz/generator';
+import { ADV_KINDS, KIND_LABEL, ORTHO_KINDS, makeQuestion, type Kind, type Level, type Mode, type Option, type Question } from '../quiz/generator';
 import { dimsOf } from '../quiz/ortho';
 import { getBuilt } from '../quiz/shapeCache';
 import { history, type Rec } from '../storage/history';
@@ -12,10 +12,11 @@ import { drawingSVG } from '../render/svg2d';
 
 interface Settings { mode: Mode; level: Level; count: number; lock: boolean }
 
-const MODE_LABEL: Record<Mode, string> = { section: '断面', view: '矢視', ortho: '三面図', mix: 'ミックス' };
-const MODE_KINDS: Record<Mode, Kind[] | undefined> = { section: ['section'], view: ['view'], ortho: ORTHO_KINDS, mix: undefined };
-const HINT_LABEL: Partial<Record<Kind, string>> = { section: 'ヒント：切断線', view: 'ヒント：透視' };
-const LEVEL_LABEL: Record<Level, string> = { 1: 'やさしい', 2: 'ふつう', 3: 'むずかしい' };
+const MODE_LABEL: Record<Mode, string> = { section: '断面', view: '矢視', ortho: '三面図', adv: '応用', mix: 'ミックス' };
+const MODE_KINDS: Record<Mode, Kind[] | undefined> = { section: ['section'], view: ['view'], ortho: ORTHO_KINDS, adv: ADV_KINDS, mix: undefined };
+const HINT_LABEL: Partial<Record<Kind, string>> = { section: 'ヒント：切断線', view: 'ヒント：透視', aux: 'ヒント：透視', points: 'ヒント：切断面', rotate: 'ヒント：回転を見る' };
+const SECTION_KINDS: Kind[] = ['section', 'points'];
+const LEVEL_LABEL: Record<Level, string> = { 1: 'やさしい', 2: 'ふつう', 3: 'むずかしい', 4: 'エキスパート' };
 const SKEY = 'kukan-trainer.settings';
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
@@ -113,9 +114,9 @@ export class App {
         </header>
         <section class="card">
           <h2>モード</h2>
-          ${seg('mode', ['section', 'view', 'ortho', 'mix'] as Mode[], (v) => MODE_LABEL[v], st.mode)}
+          ${seg('mode', ['section', 'view', 'ortho', 'adv', 'mix'] as Mode[], (v) => MODE_LABEL[v], st.mode)}
           <h2>難易度</h2>
-          ${seg('level', [1, 2, 3] as Level[], (v) => LEVEL_LABEL[v], st.level)}
+          ${seg('level', [1, 2, 3, 4] as Level[], (v) => LEVEL_LABEL[v], st.level)}
           <h2>問題数</h2>
           ${seg('count', [10, 20, 0], (v) => (v ? `${v}問` : 'エンドレス'), st.count)}
           <label class="chk"><input type="checkbox" id="lock" ${st.lock ? 'checked' : ''}> 回答前は3Dを回転させない（上級）</label>
@@ -195,13 +196,21 @@ export class App {
     this.nextQ = null;
     this.answered = false;
     this.hintUsed = false;
+    window.scrollTo(0, 0); // 回答後にスクロールした位置から戻す
     const b = getBuilt(this.w, q.shape);
     if (q.showModel) {
       this.viewer.setShape(b.mesh);
       if (q.kind === 'section') {
         this.viewer.addPlane(q.frame, q.d!);
         this.viewer.addViewArrow(q.frame);
-      } else if (q.kind === 'view') this.viewer.addViewArrow(q.frame, 'A');
+      } else if (q.kind === 'view' || q.kind === 'aux') this.viewer.addViewArrow(q.frame, 'A');
+      else if (q.kind === 'points') {
+        this.viewer.addPoints(q.points!, ['P', 'Q', 'R']);
+        this.viewer.addViewArrow(q.frame);
+      } else if (q.kind === 'rotate') {
+        this.viewer.addRotationIndicator(q.rots!);
+        this.viewer.addViewArrow(q.frame, 'A');
+      }
     } else this.viewer.clear();
     this.board.innerHTML = q.board ?? '';
     this.showBoard(!!q.board);
@@ -232,7 +241,9 @@ export class App {
     if (!q || this.answered || this.hintUsed) return;
     this.hintUsed = true;
     if (q.kind === 'section') this.viewer.showCutLines(q.polys!, q.frame, q.d!);
-    if (q.kind === 'view') this.viewer.setXray(true);
+    if (q.kind === 'view' || q.kind === 'aux') this.viewer.setXray(true);
+    if (q.kind === 'points') this.viewer.addPlane(q.frame, q.d!);
+    if (q.kind === 'rotate') this.viewer.animateRotation(q.rots!);
     const b = this.root.querySelector<HTMLButtonElement>('#hint')!;
     b.disabled = true;
     b.textContent = 'ヒント使用中';
@@ -273,12 +284,17 @@ export class App {
       <div class="res ${ok ? 'ok' : 'ng'}">${ok ? `正解！ +${gained}${this.streak > 1 ? `（${this.streak}連続）` : ''}${this.hintUsed ? '（ヒント使用）' : ''}` : '不正解'}</div>
       ${q.kind === 'ortho3d' ? `<div class="reveal-name">正解：${esc(q.shape.name)}</div>` : ''}
       <div class="row">
-        <button class="chip" id="again">${q.kind === 'section' ? '切断の様子を再生' : q.board ? '図面 ⇄ 3D' : 'その方向から見る'}</button>
+        <button class="chip" id="again">${SECTION_KINDS.includes(q.kind) ? '切断の様子を再生' : q.kind === 'rotate' ? '回転を再生' : q.board ? '図面 ⇄ 3D' : 'その方向から見る'}</button>
         <button class="primary" id="next">次へ ▶</button>
       </div>`;
     const show = () => {
-      if (q.kind === 'section') this.viewer.revealSection(getBuilt(this.w, q.shape).m, q.frame, q.d!);
+      if (SECTION_KINDS.includes(q.kind)) this.viewer.revealSection(getBuilt(this.w, q.shape).m, q.frame, q.d!);
       else if (q.kind === 'ortho3d') this.viewer.resetCamera();
+      else if (q.kind === 'rotate') {
+        // 回転させてから、指定の方向へ視点を移す
+        if (this.viewer.rotated) this.viewer.flyTo(q.frame, 1);
+        else this.viewer.animateRotation(q.rots!, () => this.viewer.flyTo(q.frame, 1));
+      }
       else this.viewer.flyTo(q.frame, 1);
     };
     this.viewer.setInteractive(true);
@@ -290,9 +306,12 @@ export class App {
     }
     show();
     fb.querySelector('#again')!.addEventListener('click', () => {
-      if (q.kind === 'section') {
+      if (SECTION_KINDS.includes(q.kind)) {
         this.viewer.setShape(getBuilt(this.w, q.shape).mesh);
         setTimeout(show, 50);
+      } else if (q.kind === 'rotate') {
+        this.viewer.resetCamera();
+        this.viewer.animateRotation(q.rots!, () => this.viewer.flyTo(q.frame, 1));
       } else if (q.board) this.showBoard(this.board.hidden === true);
       else show();
     });
@@ -424,6 +443,12 @@ export class App {
           <b>誤り探し</b>：立体と三面図を見比べ、誤っている図を1つ選びます。</p>
           <h2>ヒント</h2>
           <p>断面当てでは<b>切断線</b>（切断面と立体表面の交わる線のうち見える部分）、矢視当てでは<b>透視表示</b>が出ます。使うとその問題の得点が半分になり、苦手として記録されます。</p>
+          <h2>応用（3形式）</h2>
+          <p><b>回転後の図</b>：立体を指定の軸まわりに回したあとの図を選びます。軸は空間に固定した X・Y・Z 軸で、<b>右ねじの向きが＋</b>（軸の＋側から見て反時計回り）です。エキスパートでは2回続けて回します。<br>
+          <b>斜め矢視</b>：斜面に直交する方向など、軸に平行でない方向から見た図（補助投影図）を選びます。<br>
+          <b>3点を通る断面</b>：切断面は表示されません。赤い点P・Q・Rを通る平面を自分で思い描いて断面を選びます。</p>
+          <h2>エキスパート</h2>
+          <p>上級部品（複合角の穴、Y字管、クランク軸など）が多く出て、誤答の変形もより小さく紛らわしくなります。</p>
           <h2>座標系</h2>
           <p>Z軸が上です。正面図は −Y側から +Y方向を、平面図は上から、右側面図は +X側から見た図です。</p>
           <h2>操作</h2>

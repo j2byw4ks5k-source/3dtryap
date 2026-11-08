@@ -21,15 +21,14 @@ const { chromium, devices } = require('playwright');
       if (hint && await p.isVisible('#hint')) { await p.click('#hint'); await p.waitForTimeout(300); }
       await p.screenshot({ path: `${out}/${tag}-${i}-q.png`, fullPage: true });
       await p.click('.opt[data-i="0"]');
-      await p.waitForTimeout(1200);
+      await p.waitForTimeout(2600);
       await p.screenshot({ path: `${out}/${tag}-${i}-a.png` });
       console.log(tag, i, kind, await p.textContent('.res'));
       await p.click('#next');
     }
   };
-  await play('ortho', 2, 4, 'or', false);
-  await play('section', 2, 1, 'hs', true);
-  await play('view', 2, 1, 'hv', true);
+  const plan = JSON.parse(process.argv[3] || '[["ortho",2,4,"or",false],["section",2,1,"hs",true],["view",2,1,"hv",true]]');
+  for (const [m, lv, n, tag, hint] of plan) await play(m, lv, n, tag, hint);
   console.log('errors:', errs.length ? errs : 'none');
   await b.close();
 })();
